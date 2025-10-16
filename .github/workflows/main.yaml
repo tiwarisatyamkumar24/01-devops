@@ -1,68 +1,88 @@
-name: Deploy to Staging (EC2)
+name: 🚀 Deploy to Staging (EC2)
 
 on:
-    push:
-        branches:
-            - main
-    workflow_dispatch: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 concurrency:
-    group: main-deploy
-    cancel-in-progress: true
+  group: main-deploy
+  cancel-in-progress: true
 
 jobs:
-    deploy:
-        runs-on: ubuntu-latest
-        permissions:
-            contents: read
+  deploy:
+    name: Deploy Django App to EC2
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v4
 
-            - name: Ensure backend folder permissions
-              uses: appleboy/ssh-action@v1.0.3
-              with:
-                  host: ${{ secrets.EC2_HOST }}
-                  username: ${{ secrets.EC2_USER }}
-                  key: ${{ secrets.EC2_SSH_KEY }}
-                  script: |
-                      mkdir -p /home/${{ secrets.EC2_USER }}/backend
-                      sudo chown -R $USER:$USER /home/${{ secrets.EC2_USER }}/backend
-                      sudo chmod -R u+rwX /home/${{ secrets.EC2_USER }}/backend
+      - name: 🧩 Verify required secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_USER }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "❌ Missing one or more required secrets: EC2_HOST, EC2_USER, EC2_SSH_KEY"
+            exit 1
+          fi
+          echo "✅ All required secrets are set."
 
-            - name: Upload project to EC2 (SCP)
-              uses: appleboy/scp-action@v0.1.7
-              with:
-                  host: ${{ secrets.EC2_HOST }}
-                  username: ${{ secrets.EC2_USER }}
-                  key: ${{ secrets.EC2_SSH_KEY }}
-                  source: .
-                  target: /home/${{ secrets.EC2_USER }}/backend
-                  overwrite: true
+      - name: 🔧 Ensure backend folder permissions
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "📁 Setting up backend folder permissions..."
+            mkdir -p /home/${{ secrets.EC2_USER }}/backend
+            sudo chown -R $USER:$USER /home/${{ secrets.EC2_USER }}/backend
+            sudo chmod -R u+rwX /home/${{ secrets.EC2_USER }}/backend
 
-            - name: Deploy on EC2
-              uses: appleboy/ssh-action@v1.0.3
-              env:
-                  APP_DIR: /home/${{ secrets.EC2_USER }}/backend
-              with:
-                  host: ${{ secrets.EC2_HOST }}
-                  username: ${{ secrets.EC2_USER }}
-                  key: ${{ secrets.EC2_SSH_KEY }}
-                  script_stop: true
-                  script: |
-                      cd /home/${{ secrets.EC2_USER }}/backend
-                      
-                      sudo apt update -y
-                      sudo apt install -y python3-venv python3-pip
+      - name: 📤 Upload project to EC2 (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "."
+          target: "/home/${{ secrets.EC2_USER }}/backend"
+          overwrite: true
+          rm: true # optional: clean old files before upload
+          strip_components: 1 # optional: flatten folder structure
 
-                      python3 -m venv .venv || true
-                      source .venv/bin/activate
+      - name: 🚀 Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_DIR: /home/${{ secrets.EC2_USER }}/backend
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "🔄 Starting deployment on EC2..."
+            cd $APP_DIR
 
+            echo "📦 Updating packages..."
+            sudo apt-get update -y
+            sudo apt-get install -y python3-venv python3-pip
 
-                      python -m pip install --upgrade pip
-                      pip install -r requirements.txt
+            echo "🐍 Setting up virtual environment..."
+            python3 -m venv .venv || true
+            source .venv/bin/activate
 
-                      fuser -k 8000/tcp || true
-                      nohup python manage.py runserver 0.0.0.0:8000 > logs.out 2>&1 &
-                      echo "Deployment complete and server restarted!"
+            echo "⬆️ Upgrading pip & installing dependencies..."
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+
+            echo "🧹 Killing old process (if running)..."
+            fuser -k 8000/tcp || true
+
+            echo "🚀 Starting Django server..."
+            nohup python manage.py runserver 0.0.0.0:8000 > logs.out 2>&1 &
+
+            echo "✅ Deployment complete and server restarted!"
